@@ -54,18 +54,21 @@
     {
       "matches": ["*://*.tiktok.com/*"],
       "js": ["content/common.js", "content/tiktok.js"],
+      "css": ["styles/buttons.css"],
       "run_at": "document_idle",
       "world": "ISOLATED"
     },
     {
       "matches": ["*://*.x.com/*", "*://*.twitter.com/*"],
       "js": ["content/common.js", "content/twitter.js"],
+      "css": ["styles/buttons.css"],
       "run_at": "document_idle",
       "world": "ISOLATED"
     },
     {
       "matches": ["*://*.instagram.com/*"],
       "js": ["content/common.js", "content/instagram.js"],
+      "css": ["styles/buttons.css"],
       "run_at": "document_idle",
       "world": "ISOLATED"
     }

@@ -1,7 +1,8 @@
 // hixDownloader - shared content-script helpers.
 //
-// Task 2 adds the content side of the content <-> background message bridge.
-// Button factory, current-video id detection and toast helpers land in a later task.
+// Provides the content <-> background message bridge, the interceptor bridge,
+// plus shared UI helpers (download button factory, toast) and small DOM utils
+// consumed by the per-platform content scripts.
 
 "use strict";
 
@@ -85,5 +86,148 @@
     }
   });
 
-  window.__hixCommon = { MSG, sendMessage, requestDownload, onRawCapture };
+  // --- shared UI: download button factory ---------------------------------
+  const BTN_CLASS = "hix-download-btn";
+
+  // Inline SVG download glyph, sized to inherit the button's color/size.
+  const DOWNLOAD_ICON_SVG =
+    '<svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M5 21h14"/></svg>';
+
+  /**
+   * Create a hixDownloader download button.
+   * @param {object} [opts]
+   * @param {string} [opts.title] - accessible label / tooltip.
+   * @param {string} [opts.variant] - extra class suffix, e.g. "tiktok", "overlay".
+   * @param {(ev: MouseEvent) => void} [opts.onClick]
+   * @returns {HTMLButtonElement}
+   */
+  function createDownloadButton(opts) {
+    const o = opts || {};
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = o.variant ? `${BTN_CLASS} ${BTN_CLASS}--${o.variant}` : BTN_CLASS;
+    btn.title = o.title || "Download video";
+    btn.setAttribute("aria-label", btn.title);
+    btn.dataset.hix = "1";
+    btn.innerHTML = DOWNLOAD_ICON_SVG;
+
+    if (typeof o.onClick === "function") {
+      btn.addEventListener("click", (ev) => {
+        // Keep the host UI from reacting to our click (like/scroll/navigate).
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+          o.onClick(ev);
+        } catch (err) {
+          console.warn("[hixDownloader] button click failed:", err);
+        }
+      });
+    }
+    return btn;
+  }
+
+  /** Set the button into a transient state (loading / done / error). */
+  function setButtonState(btn, state) {
+    if (!btn) return;
+    btn.classList.remove("is-loading", "is-done", "is-error");
+    if (state) btn.classList.add(`is-${state}`);
+  }
+
+  // --- shared UI: toast ----------------------------------------------------
+  let toastTimer = null;
+
+  /**
+   * Show a brief toast message. Self-contained; never throws.
+   * @param {string} message
+   * @param {"info"|"success"|"error"} [type]
+   */
+  function toast(message, type) {
+    try {
+      let el = document.getElementById("hix-toast");
+      if (!el) {
+        el = document.createElement("div");
+        el.id = "hix-toast";
+        document.documentElement.appendChild(el);
+      }
+      el.textContent = message;
+      el.className = `hix-toast hix-toast--${type || "info"} is-visible`;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        el.classList.remove("is-visible");
+      }, 2600);
+    } catch (_) {
+      /* never break the page */
+    }
+  }
+
+  // --- shared DOM utils ----------------------------------------------------
+  /** Extract a numeric/short id from an href matching a pattern's capture group. */
+  function idFromHref(root, selector, regex) {
+    try {
+      const scope = root || document;
+      const links = scope.querySelectorAll(selector);
+      for (const a of links) {
+        const href = a.getAttribute("href") || a.href || "";
+        const m = href.match(regex);
+        if (m && m[1]) return m[1];
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    return null;
+  }
+
+  /** Find the closest ancestor matching selector, tolerant of detached nodes. */
+  function closestMatch(node, selector) {
+    try {
+      return node && node.closest ? node.closest(selector) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Observe DOM mutations and run a (debounced) callback. Returns a disconnect fn.
+   * Used by platform scripts to (re)inject buttons as feeds re-render.
+   * @param {() => void} cb
+   * @returns {() => void}
+   */
+  function observe(cb) {
+    let scheduled = false;
+    const run = () => {
+      scheduled = false;
+      try {
+        cb();
+      } catch (err) {
+        console.warn("[hixDownloader] observe callback failed:", err);
+      }
+    };
+    const mo = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      // rAF keeps us off the critical mutation path.
+      requestAnimationFrame(run);
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    // Run once immediately so existing nodes are handled.
+    run();
+    return () => mo.disconnect();
+  }
+
+  window.__hixCommon = {
+    MSG,
+    sendMessage,
+    requestDownload,
+    onRawCapture,
+    createDownloadButton,
+    setButtonState,
+    toast,
+    idFromHref,
+    closestMatch,
+    observe,
+    BTN_CLASS,
+  };
 })();
