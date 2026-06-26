@@ -56,6 +56,12 @@
   const BRIDGE_KIND = "raw-capture";
   const captureSubscribers = new Set();
 
+  // Maps a <video> element's blob src to the real CDN url the page fetched for
+  // it, populated by the interceptor's createObjectURL pairing. This lets a
+  // platform script resolve the *exact* on-screen video deterministically.
+  const blobToReal = new Map();
+  const MAX_BLOB_MAP = 60;
+
   /**
    * Subscribe to raw captures from the interceptor.
    * @param {(capture: {url: string, body: string, ts: number}) => void} fn
@@ -66,14 +72,77 @@
     return () => captureSubscribers.delete(fn);
   }
 
+  /** Resolve a blob: url (a video element's src) to its real CDN url, if known. */
+  function realUrlForBlob(blobUrl) {
+    return blobUrl ? blobToReal.get(blobUrl) || "" : "";
+  }
+
+  /**
+   * Ask the MAIN-world interceptor to download a page blob: URL. Only the world
+   * that created the blob can read it, so the actual fetch/save happens there.
+   * Resolves with { ok, size?, reason? }.
+   * @param {string} blobUrl
+   * @param {string} filename
+   * @param {number} [timeoutMs]
+   */
+  function downloadPageBlob(blobUrl, filename, timeoutMs) {
+    return new Promise((resolve) => {
+      const reqId = "b" + Date.now() + "_" + Math.random().toString(36).slice(2);
+      let done = false;
+      const onMsg = (event) => {
+        try {
+          if (event.source !== window) return;
+          const d = event.data;
+          if (!d || d.source !== BRIDGE_SOURCE) return;
+          if (d.kind !== "download-blob-result" || d.reqId !== reqId) return;
+          done = true;
+          window.removeEventListener("message", onMsg);
+          resolve(d);
+        } catch (_) {
+          /* ignore */
+        }
+      };
+      window.addEventListener("message", onMsg);
+      try {
+        window.postMessage(
+          { source: BRIDGE_SOURCE, kind: "download-blob", blobUrl, filename, reqId },
+          location.origin
+        );
+      } catch (err) {
+        window.removeEventListener("message", onMsg);
+        resolve({ ok: false, reason: String((err && err.message) || err) });
+        return;
+      }
+      setTimeout(() => {
+        if (!done) {
+          window.removeEventListener("message", onMsg);
+          resolve({ ok: false, reason: "timeout" });
+        }
+      }, timeoutMs || 20000);
+    });
+  }
+
   window.addEventListener("message", (event) => {
     try {
       if (event.source !== window) return;
       const data = event.data;
-      if (!data || data.source !== BRIDGE_SOURCE || data.kind !== BRIDGE_KIND) return;
+      if (!data || data.source !== BRIDGE_SOURCE) return;
+
+      if (data.kind === "blob-map") {
+        if (data.blobUrl && data.realUrl) {
+          blobToReal.set(data.blobUrl, data.realUrl);
+          // Bound the map so it can't grow without limit on long sessions.
+          if (blobToReal.size > MAX_BLOB_MAP) {
+            const firstKey = blobToReal.keys().next().value;
+            blobToReal.delete(firstKey);
+          }
+        }
+        return;
+      }
+
+      if (data.kind !== BRIDGE_KIND) return;
 
       const capture = { url: data.url, body: data.body, ts: data.ts };
-      console.debug("[hixDownloader] bridge received capture from", capture.url);
       for (const fn of captureSubscribers) {
         try {
           fn(capture);
@@ -222,6 +291,8 @@
     sendMessage,
     requestDownload,
     onRawCapture,
+    realUrlForBlob,
+    downloadPageBlob,
     createDownloadButton,
     setButtonState,
     toast,
