@@ -46,5 +46,44 @@
     return sendMessage(MSG.DOWNLOAD, { url, platform, id, filename });
   }
 
-  window.__hixCommon = { MSG, sendMessage, requestDownload };
+  // --- interceptor bridge (ISOLATED side) ---------------------------------
+  // The MAIN-world interceptor posts raw response bodies here via postMessage.
+  // Subscribers (per-platform parsers, added later) register a callback to turn
+  // those bodies into { id -> mp4Url } maps. For now we just expose the plumbing
+  // and log, so the bridge is verifiable end-to-end without any parser yet.
+  const BRIDGE_SOURCE = "hixDownloader";
+  const BRIDGE_KIND = "raw-capture";
+  const captureSubscribers = new Set();
+
+  /**
+   * Subscribe to raw captures from the interceptor.
+   * @param {(capture: {url: string, body: string, ts: number}) => void} fn
+   * @returns {() => void} unsubscribe
+   */
+  function onRawCapture(fn) {
+    captureSubscribers.add(fn);
+    return () => captureSubscribers.delete(fn);
+  }
+
+  window.addEventListener("message", (event) => {
+    try {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!data || data.source !== BRIDGE_SOURCE || data.kind !== BRIDGE_KIND) return;
+
+      const capture = { url: data.url, body: data.body, ts: data.ts };
+      console.debug("[hixDownloader] bridge received capture from", capture.url);
+      for (const fn of captureSubscribers) {
+        try {
+          fn(capture);
+        } catch (_) {
+          /* one bad subscriber must not break the rest */
+        }
+      }
+    } catch (_) {
+      /* never break the page */
+    }
+  });
+
+  window.__hixCommon = { MSG, sendMessage, requestDownload, onRawCapture };
 })();
