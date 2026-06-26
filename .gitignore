@@ -1,0 +1,7 @@
+# Non-readme markdown docs are local-only
+*.md
+!README.md
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
